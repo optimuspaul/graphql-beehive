@@ -2,6 +2,7 @@ const gqldate = require("graphql-iso-date");
 
 const {BeehiveDirectives, BeehiveTypeDefs} = require("./types")
 const pgsql = require("./pgsql")
+const influx = require("./influx")
 
 var graphS3
 
@@ -25,6 +26,10 @@ if (graphS3) {
 
 exports.BeehiveDirectives = BeehiveDirectives
 exports.BeehiveTypeDefs = BeehiveTypeDefs
-exports.ensureDatabase = pgsql.ensureDatabase
+
+exports.ensureDatabase = async function(schema) {
+    await pgsql.ensureDatabase(schema)
+    await influx.configureClient(schema)
+}
 
 exports.hivePg = pgsql

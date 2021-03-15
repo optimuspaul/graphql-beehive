@@ -1,5 +1,6 @@
 const {SchemaDirectiveVisitor} = require('graphql-tools')
 const {insertType, listType, getItem, getRelatedItems, getRelatedItemsFiltered, putType, patchType, queryType, simpleQueryType, inferType, deleteType, deleteRelations, appendToListField, deleteFromListField} = require("./pgsql")
+const {insertMeasurement, filterMeasurements, mapType} = require("./influx")
 const drones = require("./drones")
 
 const EVENTS = process.env.BEEHIVE_ENABLE_EVENTS == "yes"
@@ -36,6 +37,7 @@ exports.BeehiveTypeDefs = `
     }
 
     directive @beehive (schema_name: String) on SCHEMA
+    directive @beehive (schema_name: String, influx_db_name: String) on SCHEMA
 
     # partition is only valid on a native table type.
     directive @beehiveTable(table_name: String, pk_column: String, resolve_type_field: String, table_type: TableType, partition: String, native_indexes: [NativeIndex!], native_exclude: [String!]) on OBJECT | INTERFACE
@@ -77,6 +79,22 @@ exports.BeehiveTypeDefs = `
     directive @beehiveDelete(target_type_name: String, cascades: [CascadeLink!]) on FIELD_DEFINITION
 
     directive @beehiveDeleteList(target_type_name: String, cascades: [CascadeLink!]) on FIELD_DEFINITION
+
+    # tags an object to have a timeseries index created for it
+    directive @beehiveTimeseriesCollection(measurement_name: String!) on OBJECT
+
+    # tags an field to be included in a time series measurement
+    directive @beehiveMeasurement(measurement_name: String!, type: TSFieldType!) on FIELD_DEFINITION
+
+    directive @beehiveTimeseriesCollectionFilter(target_type_name: String!) on FIELD_DEFINITION
+
+    directive @beehiveTimeseriesCollectionInsert(target_type_name: String!, is_multi: Boolean) on FIELD_DEFINITION
+
+    enum TSFieldType {
+        Timestamp
+        Measurement
+        Tag
+    }
 
     enum SortDirection {
         ASC
@@ -157,6 +175,53 @@ exports.BeehiveTypeDefs = `
         error: String
     }
 
+    enum MeasurementFunctionName {
+        mean
+        median
+        count
+        min
+        max
+        sum
+        first
+        last
+        stddev
+        spread
+        none
+    }
+
+    input MeasurementFieldFunction {
+        function: MeasurementFunctionName
+        field: String!
+    }
+
+    input MeasurementQuery {
+        before: Datetime
+        after: Datetime
+        query: QueryExpression
+        interval: String
+    }
+
+    type MeasurementQueryResultInfo {
+        status: Status!
+        error: String
+        before: Datetime
+        after: Datetime
+        interval: String
+    }
+
+    type ScalarData {
+        time: Datetime
+        value: String
+        # type: String
+    }
+
+    type MeasurementQueryResult {
+        name: String!
+        function: MeasurementFunctionName
+        field: String!
+        data: [ScalarData]
+    }
+
     input CascadeLink {
         target_type_name: String!
         target_field_name: String!
@@ -190,7 +255,6 @@ function isListType(type) {
 
 
 exports.findIdField = findIdField
-
 
 
 class BeehiveDirective extends SchemaDirectiveVisitor {
@@ -255,10 +319,12 @@ class BeehiveDirective extends SchemaDirectiveVisitor {
 
     visitSchema(schema) {
         schema._beehive = {
-            schema_name: this.args.schema_name ? this.args.schema_name : "beehive",
+            schema_name: (this.args.schema_name ? this.args.schema_name : "beehive"),
+            influx_db_name: (this.args.influx_db_name ? this.args.influx_db_name : "beehive"),
             tables: [],
             lctypemap: [],
             indexes: [],
+            measurements: [],
         }
     }
 
@@ -780,6 +846,145 @@ class BeehiveDeleteDirective extends SchemaDirectiveVisitor {
 
 }
 
+class BeehiveTimeseriesCollectionDirective extends SchemaDirectiveVisitor {
+
+    visitObject(type) {
+        var measurement_config = {
+            type: type,
+            measurement_name: this.args.measurement_name,
+            time_field: null,
+            tag_fields: [],
+            measurement_fields: [],
+        }
+        if(!measurement_config.time_field) {
+            for (var field_name of Object.keys(type._fields)) {
+                var tt = String(type._fields[field_name].type)
+                if(tt == "Datetime!" || tt == "Datetime") {
+                    measurement_config.time_field = field_name
+                    break
+                }
+            }
+        }
+        // console.log("----------------------+++||_^_||+++----------------------")
+        // console.log("-----------++++++++++++++||•|•||++++++++++++++-----------")
+        // console.log("----------------+++++++++|| - ||+++++++++----------------")
+        // console.log("----------------------+++||___||+++----------------------")
+        // console.log(measurement_config)
+        // console.log("-------------------M==+++||   ||+++==M-------------------")
+        // console.log("----------------------+++|| | ||+++----------------------")
+        // console.log("------------------+++++++||_^_||+++++++------------------")
+        this.schema._beehive.measurements[type.name] = measurement_config
+        this.schema._beehive.lctypemap[type.name.toLowerCase()] = type.name
+    }
+
+}
+
+
+const functions = [
+        "mean",
+        "median",
+        "count",
+        "min",
+        "max",
+        "sum",
+        "first",
+        "last",
+        "stddev",
+        "spread",
+]
+
+function makeFunctionFor(field, fname) {
+    var copied = Object.assign({}, field)
+    copied.name = `${fname}_${field.name}`
+    delete copied.astNode
+    return copied
+}
+
+class BeehiveTimeseriesMeasuementDirective extends SchemaDirectiveVisitor {
+
+    visitFieldDefinition(field, details) {
+        const measurement_name = this.args.measurement_name
+        const type = this.args.type
+        const schema = this.schema
+
+        // console.log("----------------------+++||   ||+++----------------------")
+        // console.log(field)
+
+        var measurement_config = schema._beehive.measurements[type.name]
+        if(!measurement_config) {
+            measurement_config = schema._beehive.measurements[type.name] = {
+                type: details.objectType,
+                measurement_name: measurement_name,
+                time_field: null,
+                tag_fields: [],
+                measurement_fields: [],
+            }
+        }
+
+        if(type=="Timestamp") {
+            measurement_config.time_field = field.name
+        } else if(type=="Tag") {
+            measurement_config.tag_fields.push(field.name)
+        } else if(type=="Measurement") {
+            measurement_config.measurement_fields.push(field.name)
+            // var fieldDef = details.objectType._fields[field]
+
+            for(var fname of functions) {
+                var newField = makeFunctionFor(field, fname)
+                details.objectType._fields[newField.name] = newField
+           }
+        }
+    }
+
+
+}
+
+
+class BeehiveTimeseriesCollectionFilterDirective extends SchemaDirectiveVisitor {
+
+    visitFieldDefinition(field, details) {
+        const target_type_name = this.args.target_type_name
+        const inputName = target_type_name.charAt(0).toLowerCase() + target_type_name.slice(1)
+        const schema = this.schema
+
+        field.resolve = async function (obj, args, context, info) {
+            const measurement_config = schema._beehive.measurements[target_type_name]
+            if(args && args.query) {
+                const query = args.query
+                return filterMeasurements(schema, measurement_config, query)
+            } else {
+                return {
+                    status: "error",
+                    error: "query is required to query a measurement",
+                }
+            }
+        }
+    }
+
+}
+
+class BeehiveTimeseriesCollectionInsertDirective extends SchemaDirectiveVisitor {
+
+    visitFieldDefinition(field, details) {
+        const target_type_name = this.args.target_type_name
+        const inputName = target_type_name.charAt(0).toLowerCase() + target_type_name.slice(1)
+        const schema = this.schema
+
+        field.resolve = async function (obj, args, context, info) {
+            const measurement_config = schema._beehive.measurements[target_type_name]
+
+            var input = args[inputName]
+            if(!input) {
+                throw Error(`Input not found as expected (${inputName}) by beehive.`)
+            }
+
+            return insertMeasurement(schema, measurement_config, input)
+        }
+    }
+
+}
+
+
 
 // untested code
 class BeehiveDeleteListDirective extends SchemaDirectiveVisitor {
@@ -824,6 +1029,10 @@ exports.BeehiveDirectives = {
     beehiveDeleteList: BeehiveDeleteListDirective,
     beehiveListFieldAppend: BeehiveListFieldAppendDirective,
     beehiveListFieldDelete: BeehiveListFieldDeleteDirective,
+    beehiveTimeseriesCollection: BeehiveTimeseriesCollectionDirective,
+    beehiveMeasurement: BeehiveTimeseriesMeasuementDirective,
+    beehiveTimeseriesCollectionFilter: BeehiveTimeseriesCollectionFilterDirective,
+    beehiveTimeseriesCollectionInsert: BeehiveTimeseriesCollectionInsertDirective,
 };
 
 if (graphS3) {

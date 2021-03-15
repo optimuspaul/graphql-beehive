@@ -18,6 +18,7 @@ process.env.PGHOST = "localhost"
 process.env.PGPORT = "5432"
 
 var dbContainer
+var influxContainer
 
 if (process.env.BEEHIVE_MOCK_STREAM == "yes") {
     var kinesalite = require('kinesalite'),
@@ -45,6 +46,14 @@ before(async function() {
         }).catch(err => {
           return false})
     }
+
+    console.log('starting influxdb')
+    influxContainer = run('influxdb:1.5-alpine', {
+      remove: true,
+      ports: {
+        8086: 8086
+      }
+    })
 
     // do the deed, get postgreSQL running
     dbContainer = await (async function() {
@@ -87,6 +96,8 @@ before(async function() {
 after(async function(){
     console.log("shutting down postgres and express")
     dbContainer.destroy()
+    console.log("shutting down influxdb")
+    influxContainer.destroy()
 })
 
 

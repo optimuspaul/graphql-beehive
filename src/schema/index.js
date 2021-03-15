@@ -135,6 +135,22 @@ exports.schema = makeExecutableSchema({
         age: Int
     }
 
+    type MeasureOnce @beehiveTimeseriesCollection(measurement_name: "measure_once") {
+        at: Datetime! @beehiveMeasurement(measurement_name: "measure_once", type: Timestamp)
+        nest: Nest @beehiveMeasurement(measurement_name: "measure_once", type: Tag)
+        diameter: Int @beehiveMeasurement(measurement_name: "measure_once", type: Measurement)
+        radiance: Float @beehiveMeasurement(measurement_name: "measure_once", type: Measurement)
+        chi: Int @beehiveMeasurement(measurement_name: "measure_once", type: Measurement)
+    }
+
+    input MeasureOnceInput {
+        at: Datetime
+        nest: ID
+        diameter: Int
+        radiance: Float
+        chi: Int
+    }
+
     input NestInput {
         occupant: OccupantInput!
     }
@@ -189,6 +205,11 @@ exports.schema = makeExecutableSchema({
         items: [ID!]
     }
 
+    type MeasureOnceList {
+        info: MeasurementQueryResultInfo
+        data: [MeasureOnce!]
+    }
+
     type Query {
         things(page: PaginationInput): ThingList! @beehiveList(target_type_name: "Thing")
         findThings(query: QueryExpression!, page: PaginationInput): ThingList @beehiveQuery(target_type_name: "Thing")
@@ -207,6 +228,9 @@ exports.schema = makeExecutableSchema({
 
         searchVortices(query: QueryExpression!, page: PaginationInput): VortexList @beehiveQuery(target_type_name: "Vortex")
         searchCollections(query: QueryExpression!, page: PaginationInput): CollectionList @beehiveQuery(target_type_name: "Collection")
+
+        # time series
+        measureOnce(query: MeasurementQuery!): MeasureOnceList! @beehiveTimeseriesCollectionFilter(target_type_name: "MeasureOnce")
     }
 
     type Mutation {
@@ -235,6 +259,10 @@ exports.schema = makeExecutableSchema({
         # tag team, back again
         tagThing(thing_id: ID!, tags: [String!]!): Thing! @beehiveListFieldAppend(target_type_name: "Thing", field_name: "tags", input_field_name: "tags")
         untagThing(thing_id: ID!, tags: [String!]!): Thing! @beehiveListFieldDelete(target_type_name: "Thing", field_name: "tags", input_field_name: "tags")
+
+        # time series
+        measureOnce(measureOnce: MeasureOnceInput): MeasureOnce @beehiveTimeseriesCollectionInsert(target_type_name: "MeasureOnce", is_multi: false)
+
     }
 
     schema @beehive(schema_name: "beehive_tests") {

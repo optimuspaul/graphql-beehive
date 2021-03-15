@@ -1,6 +1,18 @@
 version: '3.6'
 services:
 
+  influxdb:
+    image: influxdb:1.5-alpine
+    restart: always
+    ports:
+      - 8086:8086
+
+  chronograf:
+    image: chronograf:1.7-alpine
+    restart: always
+    ports:
+      - 8888:8888
+
   postgres:
     image: postgres:10.4
     restart: always
@@ -23,6 +35,7 @@ services:
       - postgres
     environment:
       ENV: local
+      INFLUX_DB_HOST: influxdb
       PGPASSWORD: iamaninsecurepassword
       PGUSER: beehive_user
       PGDATABASE: beehive
