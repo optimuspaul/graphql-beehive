@@ -1,9 +1,22 @@
-.PHONY: run test
+.PHONY: push Makefile doc-gen
 
-run:
-	@sh scripts/data-dir.sh
-	@docker-compose up --build
+push:
+	git push origin master --tags
+	git push --tags
+
+# Minimal makefile for Sphinx documentation
+SPHINXOPTS    ?= 
+SPHINXBUILD   ?= sphinx-build
+SOURCEDIR     = source
+BUILDDIR      = build
 
 
-test:
-	@docker-compose run beehive-service /app/node_modules/.bin/mocha test/**/*.spec.js
+clean:
+	@$(SPHINXBUILD) -E "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS)
+
+
+# Catch-all target: route all unknown targets to Sphinx using the new
+# "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
+%: Makefile
+	@sphinx-apidoc -o "$(SOURCEDIR)" ./src
+	@$(SPHINXBUILD) -M $@ -d 4 "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)

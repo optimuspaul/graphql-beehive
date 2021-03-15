@@ -193,6 +193,10 @@ exports.findIdField = findIdField
 
 
 
+/*****************************************************
+ *  Basic Beehive directive. Used to decorate
+ *  Object/Interface tables and schema level concerns.
+ *****************************************************/
 class BeehiveDirective extends SchemaDirectiveVisitor {
 
     visitObject(type) {
